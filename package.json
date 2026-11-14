@@ -1,0 +1,44 @@
+{
+  "name": "my-island",
+  "version": "1.1.0",
+  "description": "Остров с нагрузкой, музыкой и таймером для Windows",
+  "author": "Island",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "local.my.island",
+    "productName": "Island",
+    "files": [
+      "main.js",
+      "index.html",
+      "helper.ps1",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "helper.ps1"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "artifactName": "Island-Setup.exe"
+    },
+    "portable": {
+      "artifactName": "Island-Portable.exe"
+    }
+  }
+}
