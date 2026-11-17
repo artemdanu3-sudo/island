@@ -233,7 +233,10 @@ const BUILTIN = [
   { n: 'BB', p: 'C:\\Users\\danua\\AppData\\Local\\Programs\\bb\\bb.exe' },
   { n: 'Остров', p: 'C:\\Users\\danua\\AppData\\Local\\Programs\\my-island\\Island.exe' }
 ];
-if ((S.bv || 0) < 1) { S.bv = 1; BUILTIN.forEach(a => { if (!S.apps.some(x => (x.p || '').toLowerCase() === a.p.toLowerCase())) S.apps.push(a); }); save(); }
+if ((S.bv || 0) < 1) { S.bv = 1; BUILTIN.forEach(a => {
+ try { if (!/^https?:/i.test(a.p) && !require('fs').existsSync(a.p)) return; } catch {}
+ if (!S.apps.some(x => (x.p || '').toLowerCase() === a.p.toLowerCase())) S.apps.push(a);
+}); save(); }
 const data = {}, hist = { cpu:[], gpu:[], ram:[], fps:[], temp:[], net:[] };
 let artC = '', coverB = '', tRun = 0, tLeft = 1500, tSet = 1500, hov = 0, jd = false, dr = null, vol = 50, muted = 0, volUntil = 0, doneUntil = 0, optUntil = 0, bat = null, fpsd = null, fpsSt = null, net = null, netPrev = null, pinned = false, volLock = 0, vt = null, vrt = null, vlast = 0, lastPw = 0, wacc = 0;
 const EASE = { spring:'cubic-bezier(.3,1.4,.5,1)', smooth:'cubic-bezier(.4,0,.2,1)', none:'linear' };
