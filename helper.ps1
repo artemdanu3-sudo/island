@@ -1,4 +1,5 @@
 # Один постоянный процесс: музыка, управление плеером, громкость. Читает команды из stdin, отвечает одной строкой.
+param([string]$Mode = 'music')
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -TypeDefinition @'
@@ -6,7 +7,7 @@ using System; using System.Runtime.InteropServices;
 public class K { [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, int f, int e);
   public static void Tap(byte v) { keybd_event(v, 0, 1, 0); keybd_event(v, 0, 3, 0); } }
 '@
-try {
+if ($Mode -eq 'fast') { try {
 Add-Type -TypeDefinition @'
 using System; using System.Runtime.InteropServices;
 [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -24,10 +25,11 @@ public class Audio {
   public static void Mute(int m) { V().SetMute(m == 1, Guid.Empty); }
 }
 '@
-} catch {}
+} catch {} }
 $com = $null -ne ('Audio' -as [type])
 if ($com) { try { [Audio]::Get() | Out-Null } catch { $com = $false } }
 
+if ($Mode -eq 'music') {
 $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 function Await($t, $type) { $m = $asTask.MakeGenericMethod($type); $n = $m.Invoke($null, @($t)); if ($n.Wait(4000)) { $n.Result } }
 [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
@@ -41,7 +43,7 @@ function Sess {
   if (-not $pick) { $pick = $mgr.GetCurrentSession() }
   $pick
 }
-$script:ck = ''; $script:tries = 0; $script:artOk = $false
+$script:ck = ''; $script:tries = 0; $script:artOk = $false; $script:lastArtTry = [DateTime]::MinValue
 function Music {
   $s = Sess
   if (-not $s) { return 'null' }
@@ -49,9 +51,9 @@ function Music {
   $o = @{ title = $p.Title; artist = $p.Artist; status = $s.GetPlaybackInfo().PlaybackStatus.ToString(); app = $s.SourceAppUserModelId }
   $key = "$($s.SourceAppUserModelId)|$($p.Title)|$($p.Artist)"
   if ($key -ne $script:ck) { $script:ck = $key; $script:tries = 0; $script:artOk = $false; $o.art = '' }
-  # обложка бывает не сразу после смены трека, поэтому пробуем несколько раз
-  if (-not $script:artOk -and $script:tries -lt 12) {
-    $script:tries++
+  # обложка (особенно в браузерах) появляется с задержкой: пока играет — пробуем каждые 2.5 сек
+  if (-not $script:artOk -and (($o.status -eq 'Playing') -or $script:tries -lt 4) -and (([DateTime]::UtcNow - $script:lastArtTry).TotalMilliseconds -ge 2500)) {
+    $script:lastArtTry = [DateTime]::UtcNow; $script:tries++
     try {
       if ($p.Thumbnail) {
         $str = Await ($p.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
@@ -63,6 +65,20 @@ function Music {
     } catch {}
   }
   return ($o | ConvertTo-Json -Compress)
+}
+# --- Wi-Fi / Bluetooth через Radio API (без прав администратора) ---
+[Windows.Devices.Radios.Radio, Windows.System.Devices, ContentType=WindowsRuntime] | Out-Null
+[Windows.Devices.Radios.RadioAccessStatus, Windows.System.Devices, ContentType=WindowsRuntime] | Out-Null
+[Windows.Devices.Radios.RadioState, Windows.System.Devices, ContentType=WindowsRuntime] | Out-Null
+try { Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null } catch {}
+function RadioList { Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]) }
+function RadioGet([string]$kind) {
+  try { foreach ($x in (RadioList)) { if ($x.Kind.ToString() -eq $kind) { if ($x.State.ToString() -eq 'On') { return 1 } else { return 0 } } } } catch {}
+  return -1
+}
+function RadioSet([string]$kind, [int]$on) {
+  foreach ($x in (RadioList)) { if ($x.Kind.ToString() -eq $kind) { Await ($x.SetStateAsync($(if ($on -eq 1) { 'On' } else { 'Off' }))) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null } }
+}
 }
 $est = 50; $mst = 0
 [Console]::Out.WriteLine('READY'); [Console]::Out.Flush()
@@ -81,6 +97,24 @@ while ($null -ne ($l = [Console]::In.ReadLine())) {
           }
         } else { $kk = @{ toggle = 179; next = 176; prev = 177 }[$p[1]]; if ($kk) { [K]::Tap([byte]$kk) } }
       }
+      'net' {
+        $rx = [long]0; $tx = [long]0
+        foreach ($n in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+          if ($n.OperationalStatus -eq 'Up' -and $n.NetworkInterfaceType -ne 'Loopback' -and $n.NetworkInterfaceType -ne 'Tunnel') { $s = $n.GetIPv4Statistics(); $rx += $s.BytesReceived; $tx += $s.BytesSent }
+        }
+        $out = "N $rx $tx"
+      }
+      'radio' {
+        if ($p[1] -eq 'wifi' -and $p[2]) { RadioSet 'WiFi' ([int]$p[2]) }
+        elseif ($p[1] -eq 'bt' -and $p[2]) { RadioSet 'Bluetooth' ([int]$p[2]) }
+        $out = "R $(RadioGet 'WiFi') $(RadioGet 'Bluetooth')"
+      }
+      'br' {
+        try {
+          if ($p[1] -eq 'set') { Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction Stop | Invoke-CimMethod -MethodName WmiSetBrightness -Arguments @{ Timeout = [uint32]1; Brightness = [byte][int]$p[2] } | Out-Null }
+          $out = 'B ' + [int](Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction Stop | Select-Object -First 1).CurrentBrightness
+        } catch { $out = 'B -1' }
+      }
       'vol' {
         $n = [int]$p[2]
         if ($com) {
@@ -90,7 +124,7 @@ while ($null -ne ($l = [Console]::In.ReadLine())) {
           if ($p[1] -eq 'set') { $d = [int][math]::Round(($n - $est) / 2); for ($i = 0; $i -lt [math]::Min(50, [math]::Abs($d)); $i++) { [K]::Tap([byte]$(if ($d -gt 0) { 175 } else { 174 })) }; $est = $n }
           elseif ($p[1] -eq 'mute') { if ($n -ne $mst) { [K]::Tap([byte]173) }; $mst = $n }
         }
-        $out = "V $est $mst"
+        $out = "V $est $mst $(if ($com) { 1 } else { 0 })"
       }
     }
   } catch { $out = $(if ($p[0] -eq 'music') { 'null' } elseif ($p[0] -eq 'vol') { "V $est $mst" } else { 'OK' }) }
