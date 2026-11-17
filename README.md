@@ -39,11 +39,6 @@ npm install
 npm start
 ```
 
-Без окна терминала: двойной клик по `start-island.vbs`.
-
-## Сборка установщика
-
-Двойной клик по `build-installer.bat` — в папке `dist` появятся `Island-Setup.exe` и `Island-Portable.exe`. Node.js другу не нужен.
 
 ## История версий
 
